@@ -2,6 +2,7 @@
 using Library.ApplicationCore.Entities;
 using Library.ApplicationCore.Enums;
 using Library.Console;
+using Library.Infrastructure.Data;
 
 public class ConsoleApp
 {
@@ -16,13 +17,20 @@ public class ConsoleApp
     ILoanRepository _loanRepository;
     ILoanService _loanService;
     IPatronService _patronService;
+    JsonData _jsonData;
 
-    public ConsoleApp(ILoanService loanService, IPatronService patronService, IPatronRepository patronRepository, ILoanRepository loanRepository)
+    public ConsoleApp(
+        ILoanService loanService,
+        IPatronService patronService,
+        IPatronRepository patronRepository,
+        ILoanRepository loanRepository,
+        JsonData jsonData)
     {
         _patronRepository = patronRepository;
         _loanRepository = loanRepository;
         _loanService = loanService;
         _patronService = patronService;
+        _jsonData = jsonData;
     }
 
     public async Task Run()
@@ -139,6 +147,7 @@ public class ConsoleApp
                 "m" when options.HasFlag(CommonActions.RenewPatronMembership) => CommonActions.RenewPatronMembership,
                 "e" when options.HasFlag(CommonActions.ExtendLoanedBook) => CommonActions.ExtendLoanedBook,
                 "r" when options.HasFlag(CommonActions.ReturnLoanedBook) => CommonActions.ReturnLoanedBook,
+                "b" when options.HasFlag(CommonActions.SearchBooks) => CommonActions.SearchBooks,
                 _ when int.TryParse(userInput, out optionNumber) => CommonActions.Select,
                 _ => CommonActions.Repeat
             };
@@ -166,6 +175,10 @@ public class ConsoleApp
         {
             Console.WriteLine(" - \"m\" to extend patron's membership");
         }
+        if (options.HasFlag(CommonActions.SearchBooks))
+        {
+            Console.WriteLine(" - \"b\" to check for book availability");
+        }
         if (options.HasFlag(CommonActions.SearchPatrons))
         {
             Console.WriteLine(" - \"s\" for new search");
@@ -179,7 +192,6 @@ public class ConsoleApp
             Console.WriteLine("Or type a number to select a list item.");
         }
     }
-
     async Task<ConsoleState> PatronDetails()
     {
         Console.WriteLine($"Name: {selectedPatronDetails.Name}");
@@ -193,7 +205,7 @@ public class ConsoleApp
             loanNumber++;
         }
 
-        CommonActions options = CommonActions.SearchPatrons | CommonActions.Quit | CommonActions.Select | CommonActions.RenewPatronMembership;
+        CommonActions options = CommonActions.SearchPatrons | CommonActions.Quit | CommonActions.Select | CommonActions.RenewPatronMembership | CommonActions.SearchBooks;
         CommonActions action = ReadInputOptions(options, out int selectedLoanNumber);
         if (action == CommonActions.Select)
         {
@@ -225,8 +237,55 @@ public class ConsoleApp
             selectedPatronDetails = (await _patronRepository.GetPatron(selectedPatronDetails.Id))!;
             return ConsoleState.PatronDetails;
         }
+        else if (action == CommonActions.SearchBooks)
+        {
+            return await SearchBooks();
+        }
 
         throw new InvalidOperationException("An input option is not handled.");
+    }
+
+    async Task<ConsoleState> SearchBooks()
+    {
+        string? bookTitle = null;
+        while (string.IsNullOrWhiteSpace(bookTitle))
+        {
+            Console.Write("Enter a book title to search for: ");
+            bookTitle = Console.ReadLine();
+        }
+
+        await _jsonData.EnsureDataLoaded();
+
+        var book = _jsonData.Books?.FirstOrDefault(b => 
+            b.Title.Equals(bookTitle, StringComparison.OrdinalIgnoreCase));
+
+        if (book == null)
+        {
+            Console.WriteLine("No book found with that title.");
+            return ConsoleState.PatronDetails;
+        }
+
+        var bookItem = _jsonData.BookItems?.FirstOrDefault(bi => bi.BookId == book.Id);
+
+        if (bookItem == null)
+        {
+            Console.WriteLine("No physical copy (BookItem) found for this book.");
+            return ConsoleState.PatronDetails;
+        }
+
+        var activeLoan = _jsonData.Loans?.FirstOrDefault(l => 
+            l.BookItemId == bookItem.Id && l.ReturnDate == null);
+
+        if (activeLoan == null)
+        {
+            Console.WriteLine($"{book.Title} is available for loan");
+        }
+        else
+        {
+            Console.WriteLine($"{book.Title} is on loan to another patron. The return due date is {activeLoan.DueDate}");
+        }
+
+        return ConsoleState.PatronDetails;
     }
 
     async Task<ConsoleState> LoanDetails()
